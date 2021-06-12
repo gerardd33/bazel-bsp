@@ -3,6 +3,7 @@
 NC='\033[0m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
+TEST_PROJECTS=("sample-repo" "action-graph-v2" "java-8-project" "java-11-project" "java-default-project" "cpp-project")
 
 log_test_progress() {
   echo -e "\n[TEST] $*"
@@ -33,12 +34,21 @@ run_test() {
 test_bsp_server() {
   log_test_progress "Publishing project..."
 
-  bazel run --define "maven_repo=file://$HOME/.m2/repository" //:bsp.publish
-  bsp_path="$(bazel info bazel-bin)/bsp-project.jar"
-  cd sample-repo
+  bazel build //src/main/java/org/jetbrains/bsp/bazel:bsp-install
+  bsp_path="$(bazel info bazel-bin)/src/main/java/org/jetbrains/bsp/bazel/bsp-install"
 
   log_test_progress "Installing BSP..."
-  java -cp "$bsp_path" org.jetbrains.bsp.bazel.install.Install
+
+  $bsp_path
+
+  cd test-resources
+
+  for project in "${TEST_PROJECTS[@]}"
+  do
+    cd "$project"
+    $bsp_path
+    cd ..
+  done
   cd ..
 
   log_test_progress "Environment has been prepared!"

@@ -8,38 +8,171 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+// TODO: these tests need some love again...
 public class BazelBspServerTest {
 
   private static final Logger LOGGER = LogManager.getLogger(BazelBspServerTest.class);
 
-  private final TestClient client;
+  private static final Integer SUCCESS_EXIT_CODE = 0;
+  private static final Integer FAIL_EXIT_CODE = 1;
+
   private final ExecutorService executorService = Executors.newCachedThreadPool();
 
-  public BazelBspServerTest() {
-    LOGGER.info("Creating TestClient...");
-
-    this.client =
-        TestClient$.MODULE$.testInitialStructure(
-            BazelBspServerTestData.WORKSPACE_FULL_PATH,
-            ImmutableMap.of(),
-            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
-
-    LOGGER.info("Created TestClient");
+  @SafeVarargs
+  private static <T> Stream<T> concat(Stream<T>... streams) {
+    return Stream.of(streams).reduce(Stream::concat).orElseGet(Stream::empty);
   }
 
   public void run() {
-    LOGGER.info("Running BazelBspServerTest...");
+    LOGGER.info("Creating TestClients...");
 
-    List<BazelBspServerSingleTest> testsTopRun = getTestsTopRun();
-    runTests(testsTopRun);
+    List<BazelBspServerSingleTest> testsToRun =
+        concat(
+                getSampleRepoTests().stream(),
+                getActionGraphV1Tests().stream(),
+                getActionGraphV2Tests().stream(),
+                getJava8ProjectTests().stream(),
+                getJava11ProjectTests().stream(),
+                getJavaDefaultProjectTests().stream(),
+                getEntireRepositoryImportTests().stream(),
+                getCppProjects().stream())
+            .collect(Collectors.toList());
+
+    LOGGER.info("Created TestClients. Running BazelBspServerTest...");
+    runTests(testsToRun);
   }
 
-  private List<BazelBspServerSingleTest> getTestsTopRun() {
+  private List<BazelBspServerSingleTest> getCppProjects() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.CPP_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
     return ImmutableList.of(
-        new BazelBspServerSingleTest("resolve project", client::testResolveProject),
+        new BazelBspServerSingleTest(
+            "cpp project",
+            () ->
+                client.testCompareWorkspaceTargetsResults(
+                    BazelBspServerTestData.EXPECTED_BUILD_TARGETS_CPP)),
+        new BazelBspServerSingleTest(
+            "cpp options",
+            () ->
+                client.testCppOptions(
+                    BazelBspServerTestData.CPP_OPTIONS_PARAMS,
+                    BazelBspServerTestData.CPP_OPTIONS_RESULT)));
+  }
+
+  private List<BazelBspServerSingleTest> getJava8ProjectTests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.JAVA_8_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "java-8-project workspace build targets",
+            () ->
+                client.testCompareWorkspaceTargetsResults(
+                    BazelBspServerTestData.EXPECTED_BUILD_TARGETS_JAVA_8)));
+  }
+
+  private List<BazelBspServerSingleTest> getJava11ProjectTests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.JAVA_11_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "java-11-project workspace build targets",
+            () ->
+                client.testCompareWorkspaceTargetsResults(
+                    BazelBspServerTestData.EXPECTED_BUILD_TARGETS_JAVA_11)));
+  }
+
+  private List<BazelBspServerSingleTest> getJavaDefaultProjectTests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.JAVA_11_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "java-11-project workspace build targets",
+            () ->
+                client.testCompareWorkspaceTargetsResults(
+                    BazelBspServerTestData.EXPECTED_BUILD_TARGETS_JAVA_11)));
+  }
+
+  private List<BazelBspServerSingleTest> getEntireRepositoryImportTests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.REPO_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "import entire repo", () -> client.testResolveProject(true, false)));
+  }
+
+  private List<BazelBspServerSingleTest> getActionGraphV1Tests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.SAMPLE_REPO_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "actiong-graph-v1 javacopts test",
+            () ->
+                client.testJavacOptions(
+                    BazelBspServerTestData.JAVAC_OPTIONS_PARAMS,
+                    BazelBspServerTestData.EXPECTED_JAVAC_OPTIONS)),
+        new BazelBspServerSingleTest(
+            "actiong-graph-v1 scalacopts test",
+            () ->
+                client.testScalacOptions(
+                    BazelBspServerTestData.SCALAC_OPTIONS_PARAMS,
+                    BazelBspServerTestData.EXPECTED_SCALAC_OPTIONS)));
+  }
+
+  private List<BazelBspServerSingleTest> getActionGraphV2Tests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.ACTION_GRAPH_V2_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "actiong-graph-v2 javacopts test",
+            () ->
+                client.testJavacOptions(
+                    BazelBspServerTestData.JAVAC_OPTIONS_PARAMS_ACTION_GRAPH_V2,
+                    BazelBspServerTestData.EXPECTED_JAVAC_OPTIONS_ACTION_GRAPH_V2)),
+        new BazelBspServerSingleTest(
+            "actiong-graph-v2 scalacopts test",
+            () ->
+                client.testScalacOptions(
+                    BazelBspServerTestData.SCALAC_OPTIONS_PARAMS_ACTION_GRAPH_V2,
+                    BazelBspServerTestData.EXPECTED_SCALAC_OPTIONS_ACTION_GRAPH_V2)));
+  }
+
+  private List<BazelBspServerSingleTest> getSampleRepoTests() {
+    TestClient client =
+        TestClient$.MODULE$.testInitialStructure(
+            BazelBspServerTestData.SAMPLE_REPO_FULL_PATH,
+            ImmutableMap.of(),
+            BazelBspServerTestData.TEST_CLIENT_TIMEOUT_IN_MINUTES);
+
+    return ImmutableList.of(
+        new BazelBspServerSingleTest(
+            "resolve project", () -> client.testResolveProject(false, false)),
         new BazelBspServerSingleTest(
             "compare workspace targets results",
             () ->
@@ -68,7 +201,19 @@ public class BazelBspServerTest {
             () ->
                 client.testDependencySourcesResults(
                     BazelBspServerTestData.EXPECTED_BUILD_TARGETS,
-                    BazelBspServerTestData.EXPECTED_DEPENDENCIES))
+                    BazelBspServerTestData.EXPECTED_DEPENDENCIES)),
+        new BazelBspServerSingleTest(
+            "Scala main classes",
+            () ->
+                client.testScalaMainClasses(
+                    BazelBspServerTestData.SCALA_MAIN_CLASSES_PARAMS,
+                    BazelBspServerTestData.EXPECTED_SCALA_MAIN_CLASSES)),
+        new BazelBspServerSingleTest(
+            "Scala test classes",
+            () ->
+                client.testScalaTestClasses(
+                    BazelBspServerTestData.SCALA_TEST_CLASSES_PARAMS,
+                    BazelBspServerTestData.EXPECTED_SCALA_TEST_CLASSES))
         //         TODO one day we will uncomment them...
         //        new BazelBspServerSingleTest(
         //            "targets run unsuccessfully",
@@ -110,15 +255,12 @@ public class BazelBspServerTest {
   }
 
   private void exitProgramWithSuccessIfAllTestPassed(boolean didAllTestsPass) {
-    int successExitCode = 0;
-    int failExitCode = 1;
-
     if (didAllTestsPass) {
       LOGGER.info("All test passed - exiting with success");
-      System.exit(successExitCode);
+      System.exit(SUCCESS_EXIT_CODE);
     }
 
     LOGGER.fatal("Test failed - exiting with fail");
-    System.exit(failExitCode);
+    System.exit(FAIL_EXIT_CODE);
   }
 }

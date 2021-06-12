@@ -20,20 +20,23 @@ import com.google.devtools.build.v1.PublishLifecycleEventRequest;
 import com.google.protobuf.Empty;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.bsp.bazel.common.Constants;
-import org.jetbrains.bsp.bazel.common.Uri;
-import org.jetbrains.bsp.bazel.server.data.BazelData;
-import org.jetbrains.bsp.bazel.server.logger.BuildClientLogger;
-import org.jetbrains.bsp.bazel.server.util.ParsingUtils;
+import org.jetbrains.bsp.bazel.commons.Constants;
+import org.jetbrains.bsp.bazel.commons.Uri;
+import org.jetbrains.bsp.bazel.server.bazel.data.BazelData;
+import org.jetbrains.bsp.bazel.server.bazel.utils.ExitCodeMapper;
+import org.jetbrains.bsp.bazel.server.bep.parsers.ClasspathParser;
+import org.jetbrains.bsp.bazel.server.bep.parsers.error.StderrDiagnosticsParser;
+import org.jetbrains.bsp.bazel.server.loggers.BuildClientLogger;
 
 public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
 
@@ -47,9 +50,9 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
   private final BazelData bazelData;
   private final BepDiagnosticsDispatcher diagnosticsDispatcher;
 
-  private final Set<Uri> compilerClasspath = new TreeSet<>();
   private final Deque<TaskId> startedEventTaskIds = new ArrayDeque<>();
   private final Map<String, String> diagnosticsProtosLocations = new HashMap<>();
+  private final Map<String, Set<Uri>> outputGroupPaths = new HashMap<>();
   private final Map<String, BuildEventStreamProtos.NamedSetOfFiles> namedSetsOfFiles =
       new HashMap<>();
 
@@ -90,7 +93,7 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
       BuildEventStreamProtos.BuildEvent event =
           BuildEventStreamProtos.BuildEvent.parseFrom(buildEvent.getBazelEvent().getValue());
 
-      LOGGER.info("Got event {}", event);
+      LOGGER.debug("Got event {}", event);
 
       processBuildStartedEvent(event);
       processFinishedEvent(event);
@@ -134,16 +137,16 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
 
   private void consumeFinishedEvent(BuildEventStreamProtos.BuildFinished buildFinished) {
     if (startedEventTaskIds.isEmpty()) {
-      LOGGER.info("No start event id was found.");
+      LOGGER.debug("No start event id was found.");
       return;
     }
 
     if (startedEventTaskIds.size() > 1) {
-      LOGGER.info("More than 1 start event was found");
+      LOGGER.debug("More than 1 start event was found");
       return;
     }
 
-    StatusCode exitCode = ParsingUtils.parseExitCode(buildFinished.getExitCode().getCode());
+    StatusCode exitCode = ExitCodeMapper.mapExitCode(buildFinished.getExitCode().getCode());
     TaskFinishParams finishParams = new TaskFinishParams(startedEventTaskIds.pop(), exitCode);
     finishParams.setEventTime(buildFinished.getFinishTimeMillis());
 
@@ -158,6 +161,7 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
 
   private void consumeCompletedEvent(BuildEventStreamProtos.TargetComplete targetComplete) {
     List<OutputGroup> outputGroups = targetComplete.getOutputGroupList();
+    LOGGER.info("Consuming target completed event " + targetComplete);
     if (outputGroups.size() == 1) {
       OutputGroup outputGroup = outputGroups.get(0);
       if (outputGroup.getName().equals(Constants.SCALA_COMPILER_CLASSPATH_FILES)) {
@@ -169,12 +173,16 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
   private void fetchScalaJars(OutputGroup outputGroup) {
     outputGroup.getFileSetsList().stream()
         .flatMap(fileSetId -> namedSetsOfFiles.get(fileSetId.getId()).getFilesList().stream())
-        .map(file -> ParsingUtils.parseUri(file.getUri()))
-        .flatMap(pathProtoUri -> ParsingUtils.parseClasspathFromAspect(pathProtoUri).stream())
+        .map(file -> URI.create(file.getUri()))
+        .flatMap(pathProtoUri -> ClasspathParser.fromAspect(pathProtoUri).stream())
+        .peek(path -> LOGGER.info("Found path " + path))
         .forEach(
             path ->
-                compilerClasspath.add(
-                    Uri.fromExecPath(Constants.EXEC_ROOT_PREFIX + path, bazelData.getExecRoot())));
+                outputGroupPaths
+                    .computeIfAbsent(outputGroup.getName(), key -> new HashSet<>())
+                    .add(
+                        Uri.fromExecPath(
+                            Constants.EXEC_ROOT_PREFIX + path, bazelData.getExecRoot())));
   }
 
   private void processActionEvent(BuildEventStreamProtos.BuildEvent event) {
@@ -226,8 +234,12 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
 
   private void consumeAbortedEvent(BuildEventStreamProtos.Aborted aborted) {
     if (aborted.getReason() != BuildEventStreamProtos.Aborted.AbortReason.NO_BUILD) {
-      buildClientLogger.logError(
-          "Command aborted with reason " + aborted.getReason() + ": " + aborted.getDescription());
+      String errorMessage =
+          String.format(
+              "Command aborted with reason %s: %s", aborted.getReason(), aborted.getDescription());
+      buildClientLogger.logError(errorMessage);
+
+      throw new RuntimeException(errorMessage);
     }
   }
 
@@ -239,7 +251,7 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
 
   private void consumeProgressEvent(BuildEventStreamProtos.Progress progress) {
     Map<String, List<Diagnostic>> fileDiagnostics =
-        ParsingUtils.parseStderrDiagnostics(progress.getStderr());
+        StderrDiagnosticsParser.parse(progress.getStderr());
 
     fileDiagnostics.entrySet().stream()
         .map(this::createParamsFromEntry)
@@ -260,8 +272,8 @@ public class BepServer extends PublishBuildEventGrpc.PublishBuildEventImplBase {
         false);
   }
 
-  public Set<Uri> getCompilerClasspath() {
-    return compilerClasspath;
+  public Map<String, Set<Uri>> getOutputGroupPaths() {
+    return outputGroupPaths;
   }
 
   public Map<String, String> getDiagnosticsProtosLocations() {

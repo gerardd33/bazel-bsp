@@ -26,8 +26,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.bsp.bazel.common.Uri;
-import org.jetbrains.bsp.bazel.server.data.BazelData;
+import org.jetbrains.bsp.bazel.commons.Uri;
+import org.jetbrains.bsp.bazel.server.bazel.data.BazelData;
 
 public class BepDiagnosticsDispatcher {
 
@@ -59,7 +59,7 @@ public class BepDiagnosticsDispatcher {
           TargetDiagnostics.parseFrom(Files.readAllBytes(Paths.get(diagnosticsLocation)));
 
       return targetDiagnostics.getDiagnosticsList().stream()
-          .peek(diagnostics -> LOGGER.info("Collected diagnostics at: {}", diagnostics.getPath()))
+          .peek(diagnostics -> LOGGER.debug("Collected diagnostics at: {}", diagnostics.getPath()))
           .collect(
               Collectors.toMap(
                   diagnostics -> getUriForPath(diagnostics.getPath()),

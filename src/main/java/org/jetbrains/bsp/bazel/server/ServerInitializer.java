@@ -11,9 +11,13 @@ import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import org.jetbrains.bsp.bazel.common.Constants;
-import org.jetbrains.bsp.bazel.server.bsp.BazelBspServerConfig;
+import org.jetbrains.bsp.bazel.commons.Constants;
+import org.jetbrains.bsp.bazel.projectview.model.ProjectView;
+import org.jetbrains.bsp.bazel.projectview.model.ProjectViewProvider;
+import org.jetbrains.bsp.bazel.projectview.parser.ProjectViewDefaultParserProvider;
 import org.jetbrains.bsp.bazel.server.bsp.BspIntegrationData;
+import org.jetbrains.bsp.bazel.server.bsp.config.BazelBspServerConfig;
+import org.jetbrains.bsp.bazel.server.bsp.config.ServerArgsProjectViewProvider;
 
 public class ServerInitializer {
 
@@ -30,26 +34,19 @@ public class ServerInitializer {
 
     try {
       Path rootDir = Paths.get(Constants.BAZELBSP_DIR_NAME).toAbsolutePath();
-
       Files.createDirectories(rootDir);
-      Path log = rootDir.resolve(Constants.BAZELBSP_LOG_FILE_NAME);
-      PrintStream logStream =
-          new PrintStream(
-              Files.newOutputStream(
-                  log, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
 
       Path traceFile = rootDir.resolve(Constants.BAZELBSP_TRACE_JSON_FILE_NAME);
       PrintWriter traceWriter =
           new PrintWriter(
               Files.newOutputStream(
                   traceFile, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
-      System.setOut(logStream);
-      System.setErr(logStream);
+
+      BazelBspServerConfig bazelBspServerConfig = getBazelBspServerConfig(args);
 
       BspIntegrationData bspIntegrationData =
           new BspIntegrationData(stdout, stdin, executor, traceWriter);
-      BazelBspServerConfig serverConfig = BazelBspServerConfig.from(args);
-      BazelBspServer bspServer = new BazelBspServer(serverConfig);
+      BazelBspServer bspServer = new BazelBspServer(bazelBspServerConfig);
       bspServer.startServer(bspIntegrationData);
 
       Server server = bspIntegrationData.getServer().start();
@@ -67,5 +64,25 @@ public class ServerInitializer {
     if (hasErrors) {
       System.exit(1);
     }
+  }
+
+  private static BazelBspServerConfig getBazelBspServerConfig(String[] args) {
+    String pathToBazel = args[0];
+    ProjectView projectView = getProjectView(args);
+    return new BazelBspServerConfig(pathToBazel, projectView);
+  }
+
+  private static ProjectView getProjectView(String[] args) {
+    ProjectViewProvider provider = getProjectViewProvider(args);
+
+    return provider.create();
+  }
+
+  private static ProjectViewProvider getProjectViewProvider(String[] args) {
+    if (args.length == 2) {
+      return new ServerArgsProjectViewProvider(args[1]);
+    }
+
+    return new ProjectViewDefaultParserProvider();
   }
 }
